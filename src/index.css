@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0a0a0f;
+  color: #e0e0e8;
+  font-family: 'JetBrains Mono', monospace;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0a0f;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e1e2a;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2a2a3a;
+}
+
+@layer utilities {
+  .panel {
+    @apply bg-nexus-panel border border-nexus-border rounded-lg;
+    background: linear-gradient(135deg, rgba(22, 22, 31, 0.95), rgba(16, 16, 24, 0.98));
+    backdrop-filter: blur(10px);
+  }
+
+  .panel-header {
+    @apply text-[10px] uppercase tracking-[0.2em] font-semibold text-nexus-text-dim px-3 py-2 border-b border-nexus-border;
+  }
+
+  .knob-label {
+    @apply text-[9px] uppercase tracking-[0.15em] text-nexus-text-dim text-center mt-1;
+  }
+
+  .knob-value {
+    @apply text-[10px] font-mono text-nexus-text text-center;
+  }
+
+  .glow-line {
+    background: linear-gradient(90deg, transparent, #00d4ff, transparent);
+    height: 1px;
+    opacity: 0.3;
+  }
+
+  .accent-dot {
+    @apply w-1.5 h-1.5 rounded-full bg-nexus-accent;
+    box-shadow: 0 0 6px rgba(0, 212, 255, 0.6);
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes scan-line {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
