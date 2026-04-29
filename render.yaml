@@ -1,0 +1,42 @@
+services:
+  # Static deploy — cheaper, faster, and free on Render.
+  # Point your Render dashboard at this repo with the "Static Site" service type.
+  - type: web
+    name: nexus-synth
+    runtime: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: SAMEORIGIN
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Permissions-Policy
+        value: midi=*, microphone=()
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+    routes:
+      # SPA fallback — all unknown routes serve index.html
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # Enable analytics providers by setting any of these in the Render dashboard.
+      - key: VITE_PLAUSIBLE_DOMAIN
+        sync: false
+      - key: VITE_UMAMI_WEBSITE_ID
+        sync: false
+      - key: VITE_UMAMI_SRC
+        sync: false
+      - key: VITE_GOATCOUNTER_SITE
+        sync: false
+      - key: VITE_CF_BEACON_TOKEN
+        sync: false
+      - key: VITE_GA4_ID
+        sync: false
+      - key: VITE_COUNTER_NAMESPACE
+        sync: false
