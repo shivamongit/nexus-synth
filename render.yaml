@@ -25,6 +25,9 @@ services:
         source: /*
         destination: /index.html
     envVars:
+      # Track Rack (Demucs) — optional; not included on static deploy. Point to a separate worker if you host one.
+      - key: VITE_STEM_API_URL
+        sync: false
       # Enable analytics providers by setting any of these in the Render dashboard.
       - key: VITE_PLAUSIBLE_DOMAIN
         sync: false

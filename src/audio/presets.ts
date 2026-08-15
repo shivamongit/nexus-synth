@@ -21,6 +21,7 @@ const BASE: SynthParams = {
     delayTime: 0.3, delayFeedback: 0.3, delayMix: 0,
     distortionDrive: 0, distortionMix: 0,
     chorusRate: 1, chorusDepth: 0.5, chorusMix: 0,
+    eqLow: 0, eqMid: 0, eqHigh: 0, phaserMix: 0, phaserRate: 0.4, stereoWidth: 0.5,
   },
   lfo: { rate: 2, depth: 0, waveform: 'sine', target: 'filter' },
   lfo2: { rate: 0.4, depth: 0, waveform: 'triangle', target: 'filter2' },

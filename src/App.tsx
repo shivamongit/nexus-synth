@@ -13,8 +13,11 @@ import MidiIndicator from './components/MidiIndicator';
 import PeakMeter from './components/PeakMeter';
 import PresetBrowser from './components/PresetBrowser';
 import CaptureStudio from './components/CaptureStudio';
+import TrackRack from './components/TrackRack';
+import GitHubPanel from './components/GitHubPanel';
+import { GITHUB_REPO, NAV_LABELS, NAV_MODES, type NavMode } from './lib/config';
 
-type ViewMode = 'synth' | 'sequencer' | 'voice';
+type ViewMode = NavMode | 'github';
 
 const WAVEFORMS: WaveformType[] = ['sine', 'sawtooth', 'square', 'triangle'];
 const WAVE_ICONS: Record<WaveformType, string> = {
@@ -26,7 +29,7 @@ const FILTER_LABELS: Record<FilterType, string> = {
 };
 const LFO_TARGETS: LfoTarget[] = ['filter', 'filter2', 'pitch', 'amp', 'drive', 'res'];
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 
 function deepClone<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj));
@@ -39,11 +42,10 @@ const App: React.FC = () => {
   const [engine, setEngine] = useState<AudioEngine | null>(null);
   const [activeNotes, setActiveNotes] = useState<Set<number>>(new Set());
   const [octave, setOctave] = useState(0);
-  const [viewMode, setViewMode] = useState<ViewMode>('synth');
+  const [viewMode, setViewMode] = useState<ViewMode>('voice');
   const [vizMode, setVizMode] = useState<'oscilloscope' | 'spectrum'>('oscilloscope');
   const [seqPattern, setSeqPattern] = useState<SeqCell[][] | null>(null);
   const [seqPatternId, setSeqPatternId] = useState(0);
-  const [followFilter, setFollowFilter] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
 
   // MIDI state
@@ -101,6 +103,24 @@ const App: React.FC = () => {
       }
       return next;
     });
+  }, []);
+
+  const prepareVoicePlay = useCallback(() => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    eng.setSustainPedal(false);
+    const p = deepClone(paramsRef.current);
+    p.sampleMix = 0;
+    p.glide = 0;
+    p.osc1.unison = 1;
+    p.osc2.unison = 1;
+    p.ampEnv = { attack: 0.003, decay: 0.08, sustain: 0.88, release: 0.1 };
+    p.filter.frequency = Math.max(p.filter.frequency, 4500);
+    p.filter.envAmount = Math.min(p.filter.envAmount + 0.2, 1);
+    p.masterGain = Math.max(p.masterGain, 0.72);
+    p.osc1.gain = Math.max(p.osc1.gain, 0.55);
+    p.osc2.gain = Math.max(p.osc2.gain, 0.35);
+    eng.updateParams(p);
   }, []);
 
   const handleNoteOn = useCallback((note: number, velocity: number) => {
@@ -242,40 +262,61 @@ const App: React.FC = () => {
   );
 
   return (
-    <div className="w-full h-full flex flex-col bg-nexus-bg overflow-hidden">
-      {/* HEADER */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-nexus-border bg-nexus-bg/80 backdrop-blur-sm flex-shrink-0 gap-3">
-        <div className="flex items-center gap-3 flex-shrink-0">
-          <div className="flex items-center gap-2">
+    <div className="w-full h-full flex flex-col overflow-hidden">
+      {!isInitialized && (
+        <div className="start-overlay" onClick={initAudio} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') initAudio(); }}>
+          <div className="start-overlay-glow" aria-hidden />
+          <div className="text-center start-overlay-card">
+            <div className="hud-kicker mb-3">Spectral workstation</div>
+            <h2 className="font-display text-4xl font-semibold tracking-[0.2em] text-white mb-2">NEXUS</h2>
+            <p className="text-nexus-text-dim text-sm mb-6 max-w-sm mx-auto leading-relaxed">
+              Audio → MIDI · Track Rack · Synth · Sequencer
+            </p>
+            <button type="button" className="btn-accent" onClick={(e) => { e.stopPropagation(); initAudio(); }}>
+              Enter studio
+            </button>
+            <p className="start-overlay-hint mt-4">Click anywhere to start audio</p>
+          </div>
+        </div>
+      )}
+      <header className="app-header flex items-center justify-between px-5 py-3 flex-shrink-0 gap-3">
+        <div className="flex items-center gap-3 flex-shrink-0 min-w-0">
+          <div className="flex items-center gap-2 flex-shrink-0">
             <div className="w-2 h-2 rounded-full bg-nexus-accent animate-pulse-glow" style={{ boxShadow: '0 0 8px #00d4ff' }} />
-            <h1 className="text-base font-display font-bold tracking-[0.15em] text-nexus-text">NEXUS</h1>
-            <span className="text-[8px] uppercase tracking-[0.2em] text-nexus-text-muted font-mono mt-0.5">SPECTRAL SYNTH v{APP_VERSION}</span>
+            <h1 className="text-lg font-display font-semibold tracking-[0.28em] text-white">NEXUS</h1>
+            <span className="text-[9px] uppercase tracking-[0.28em] text-nexus-text-dim font-display mt-0.5 hidden sm:inline">v{APP_VERSION}</span>
           </div>
           {!embedded && (
             <>
-              <div className="h-4 w-px bg-nexus-border" />
-              <div className="flex items-center gap-1">
-                {(['synth', 'sequencer', 'voice'] as const).map(mode => (
+              <div className="h-4 w-px bg-nexus-border hidden md:block" />
+              <nav className="nav-rail flex items-center gap-0.5 p-0.5 rounded-xl overflow-x-auto max-w-[min(100vw-12rem,52rem)]" aria-label="Main">
+                {NAV_MODES.map(mode => (
                   <button
                     key={mode}
+                    type="button"
                     onClick={() => setViewMode(mode)}
-                    className={`text-[9px] uppercase tracking-wider px-2.5 py-1 rounded transition-all ${
-                      viewMode === mode
-                        ? 'bg-nexus-accent/15 text-nexus-accent border border-nexus-accent/30'
-                        : 'text-nexus-text-dim hover:text-nexus-text'
-                    }`}
+                    className={`nav-tab ${viewMode === mode ? 'active' : ''}`}
                   >
-                    {mode}
+                    {NAV_LABELS[mode]}
                   </button>
                 ))}
-              </div>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('github')}
+                  className={`nav-tab nav-tab-github${viewMode === 'github' ? ' active' : ''}`}
+                >
+                  GitHub
+                </button>
+              </nav>
             </>
           )}
         </div>
 
-        {/* Preset browser */}
-        <div className="flex-1 flex justify-center">
-          <PresetBrowser presets={PRESETS} currentIndex={presetIdx} onLoad={loadPreset} />
+        {/* Preset browser — synth-focused */}
+        <div className="flex-1 flex justify-center hidden lg:flex">
+          {(viewMode === 'synth' || viewMode === 'sequencer') && (
+            <PresetBrowser presets={PRESETS} currentIndex={presetIdx} onLoad={loadPreset} />
+          )}
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
@@ -291,14 +332,6 @@ const App: React.FC = () => {
             modWheel={modWheel}
           />
 
-          {!isInitialized && (
-            <button
-              onClick={initAudio}
-              className="text-[9px] uppercase tracking-wider px-3 py-1.5 rounded bg-nexus-accent/20 text-nexus-accent border border-nexus-accent/40 hover:bg-nexus-accent/30 transition-all shadow-glow"
-            >
-              START AUDIO
-            </button>
-          )}
           <div className="flex items-center gap-1.5 px-2 py-1 rounded border border-nexus-border bg-nexus-surface">
             <span className="text-[8px] uppercase tracking-wider text-nexus-text-muted">VOICES</span>
             <span className="text-[10px] font-mono text-nexus-accent w-4 text-right">{engine?.activeVoiceCount ?? 0}</span>
@@ -314,7 +347,36 @@ const App: React.FC = () => {
 
       {/* MAIN CONTENT */}
       <div className="flex-1 flex flex-col overflow-hidden p-2 gap-2">
-        {viewMode === 'synth' ? (
+        {viewMode === 'voice' ? (
+          <div className="panel flex-1 flex flex-col min-h-0 overflow-hidden !border-0 !bg-transparent !shadow-none">
+            <CaptureStudio
+              engine={engine}
+              initAudio={initAudio}
+              onPreparePlay={prepareVoicePlay}
+              onNotes={() => {}}
+              onPattern={(grid, bpm, rootMidi) => {
+                setSeqPattern(grid);
+                setSeqPatternId((n) => n + 1);
+                const eng = engineRef.current;
+                if (eng) eng.sampleRootMidi = rootMidi;
+                void bpm;
+              }}
+            />
+          </div>
+        ) : viewMode === 'tracks' ? (
+          <div className="panel flex-1 flex flex-col min-h-0 overflow-hidden !border-0 !bg-transparent !shadow-none">
+            <TrackRack
+              engine={engine}
+              initAudio={initAudio}
+              onPreparePlay={prepareVoicePlay}
+              onLoadPreset={loadPreset}
+            />
+          </div>
+        ) : viewMode === 'github' ? (
+          <div className="panel flex-1 flex flex-col min-h-0 overflow-hidden !border-0 !bg-transparent !shadow-none">
+            <GitHubPanel />
+          </div>
+        ) : viewMode === 'synth' ? (
           <>
             {/* TOP ROW: Visualizer + Oscillators + Filter */}
             <div className="flex gap-2 flex-shrink-0" style={{ minHeight: '220px' }}>
@@ -638,6 +700,12 @@ const App: React.FC = () => {
                   <Knob label="CHR MIX" value={params.effects.chorusMix} min={0} max={1} color="#a855f7" onChange={v => updateParam('effects', 'chorusMix', v)} />
                   <Knob label="CHR RATE" value={params.effects.chorusRate} min={0.1} max={6} unit="Hz" color="#a855f7" onChange={v => updateParam('effects', 'chorusRate', v)} />
                   <Knob label="CHR DEPTH" value={params.effects.chorusDepth} min={0} max={1} color="#a855f7" onChange={v => updateParam('effects', 'chorusDepth', v)} />
+                  <Knob label="EQ LOW" value={params.effects.eqLow} min={-12} max={12} unit="dB" color="#3dffb0" onChange={v => updateParam('effects', 'eqLow', v)} />
+                  <Knob label="EQ MID" value={params.effects.eqMid} min={-12} max={12} unit="dB" color="#3dffb0" onChange={v => updateParam('effects', 'eqMid', v)} />
+                  <Knob label="EQ HIGH" value={params.effects.eqHigh} min={-12} max={12} unit="dB" color="#3dffb0" onChange={v => updateParam('effects', 'eqHigh', v)} />
+                  <Knob label="PHASER" value={params.effects.phaserMix} min={0} max={1} color="#7c5cff" onChange={v => updateParam('effects', 'phaserMix', v)} />
+                  <Knob label="PH RATE" value={params.effects.phaserRate} min={0.05} max={8} unit="Hz" color="#7c5cff" onChange={v => updateParam('effects', 'phaserRate', v)} />
+                  <Knob label="WIDTH" value={params.effects.stereoWidth} min={0} max={1} color="#00f0ff" onChange={v => updateParam('effects', 'stereoWidth', v)} />
                   <Knob label="DIST" value={params.effects.distortionDrive} min={0} max={1} onChange={v => updateParam('effects', 'distortionDrive', v)} />
                   <Knob label="DIST MX" value={params.effects.distortionMix} min={0} max={1} onChange={v => updateParam('effects', 'distortionMix', v)} />
                 </div>
@@ -651,28 +719,6 @@ const App: React.FC = () => {
               </div>
             </div>
           </>
-        ) : viewMode === 'voice' ? (
-          <div className="panel flex-1 overflow-auto">
-            <div className="panel-header"><span>VOICE → PATTERN</span></div>
-            <CaptureStudio
-              engine={engine}
-              initAudio={initAudio}
-              sampleMix={params.sampleMix}
-              onSampleMix={(v) => updateParam('sampleMix', '', v)}
-              followFilter={followFilter}
-              onFollowFilter={setFollowFilter}
-              onPattern={(grid, bpm, rootMidi) => {
-                setSeqPattern(grid);
-                setSeqPatternId((n) => n + 1);
-                setViewMode('sequencer');
-                const eng = engineRef.current;
-                if (eng) {
-                  eng.sampleRootMidi = rootMidi;
-                }
-                void bpm;
-              }}
-            />
-          </div>
         ) : (
           <div className="panel flex-1">
             <div className="panel-header"><span>STEP SEQUENCER</span></div>
@@ -689,7 +735,7 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {/* KEYBOARD */}
+        {(viewMode === 'synth' || viewMode === 'sequencer') && (
         <div className="panel flex-shrink-0">
           <div className="panel-header"><span>KEYBOARD</span></div>
           <div className="p-2">
@@ -702,17 +748,25 @@ const App: React.FC = () => {
             />
           </div>
         </div>
+        )}
       </div>
 
       {/* FOOTER */}
-      <footer className="flex items-center justify-between px-4 py-1 border-t border-nexus-border text-[8px] text-nexus-text-muted font-mono flex-shrink-0">
+      <footer className="app-footer flex items-center justify-between px-4 py-1.5 text-[8px] text-nexus-text-muted font-mono flex-shrink-0">
         <span>
-          NEXUS SPECTRAL SYNTHESIZER v{APP_VERSION}
+          NEXUS v{APP_VERSION}
           {getActiveProviders().length > 0 && (
             <span className="ml-3 text-nexus-text-dim">● {getActiveProviders().join(' · ')}</span>
           )}
         </span>
-        <span>{engine ? `${engine.ctx.sampleRate}Hz · ${engine.ctx.state}${engine.workletActive ? ' · ZDF' : ''}` : 'Audio not initialized'}</span>
+        <span className="flex items-center gap-3">
+          {engine && (
+            <span>{engine.ctx.sampleRate}Hz · {engine.ctx.state}{engine.workletActive ? ' · ZDF' : ''}</span>
+          )}
+          <a href={GITHUB_REPO} target="_blank" rel="noopener noreferrer" className="footer-github">
+            GitHub
+          </a>
+        </span>
       </footer>
     </div>
   );

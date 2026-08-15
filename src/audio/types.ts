@@ -47,6 +47,12 @@ export interface EffectsConfig {
   chorusRate: number;
   chorusDepth: number;
   chorusMix: number;
+  eqLow: number;
+  eqMid: number;
+  eqHigh: number;
+  phaserMix: number;
+  phaserRate: number;
+  stereoWidth: number;
 }
 
 export interface LFOConfig {
@@ -137,6 +143,12 @@ export function hydrateParams(p: Partial<SynthParams> = {}): SynthParams {
     modMatrix: p.modMatrix?.length ? p.modMatrix : defaultModMatrix(),
     sampleMix: p.sampleMix ?? 0,
     drive: (p.drive as number) ?? 0.15,
+    effects: {
+      reverbMix: 0, reverbDecay: 1.5, delayTime: 0.3, delayFeedback: 0.3, delayMix: 0,
+      distortionDrive: 0, distortionMix: 0, chorusRate: 1, chorusDepth: 0.5, chorusMix: 0,
+      eqLow: 0, eqMid: 0, eqHigh: 0, phaserMix: 0, phaserRate: 0.4, stereoWidth: 0.5,
+      ...(p.effects || {}),
+    },
   } as SynthParams;
 }
 

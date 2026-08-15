@@ -17,6 +17,7 @@ const Knob: React.FC<KnobProps> = ({
   value, min, max, step = 0.01, label, unit = '',
   size = 48, color = '#00d4ff', onChange, formatValue,
 }) => {
+  const uid = React.useId().replace(/:/g, '');
   const knobRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef({ dragging: false, startY: 0, startVal: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -144,7 +145,7 @@ const Knob: React.FC<KnobProps> = ({
             cx={cx}
             cy={cy}
             r={radius - 4}
-            fill="url(#knobGrad)"
+            fill={`url(#knobGrad-${uid})`}
             stroke={isDragging ? color : '#2a2a3a'}
             strokeWidth={1}
           />
@@ -162,7 +163,7 @@ const Knob: React.FC<KnobProps> = ({
             }}
           />
           <defs>
-            <radialGradient id="knobGrad" cx="35%" cy="35%">
+            <radialGradient id={`knobGrad-${uid}`} cx="35%" cy="35%">
               <stop offset="0%" stopColor="#2a2a38" />
               <stop offset="100%" stopColor="#151520" />
             </radialGradient>

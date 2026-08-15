@@ -8,23 +8,23 @@ export default {
     extend: {
       colors: {
         nexus: {
-          bg: '#0a0a0f',
-          surface: '#111118',
-          panel: '#16161f',
-          border: '#1e1e2a',
-          accent: '#00d4ff',
-          'accent-dim': '#00a5c7',
+          bg: '#03050a',
+          surface: '#0b121a',
+          panel: '#0c121c',
+          border: '#163044',
+          accent: '#00f0ff',
+          'accent-dim': '#00a8b8',
           warm: '#ff6b35',
-          green: '#00ff88',
+          green: '#3dffb0',
           pink: '#ff2d7b',
-          text: '#e0e0e8',
-          'text-dim': '#6b6b80',
-          'text-muted': '#3a3a4a',
+          text: '#e8f6ff',
+          'text-dim': '#7a93a8',
+          'text-muted': '#4d6478',
         }
       },
       fontFamily: {
         mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
-        display: ['Outfit', 'sans-serif'],
+        display: ['Oxanium', 'Outfit', 'sans-serif'],
       },
       boxShadow: {
         'glow': '0 0 20px rgba(0, 212, 255, 0.15)',

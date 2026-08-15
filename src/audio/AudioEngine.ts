@@ -37,6 +37,7 @@ interface Voice {
   startTime: number;
   released: boolean;
   sustained: boolean;
+  speak?: boolean;
 }
 
 const MAX_VOICES = 12;
@@ -105,6 +106,8 @@ export class AudioEngine {
   peakAnalyserR: AnalyserNode;
 
   private voices: Map<number, Voice> = new Map();
+  /** Pitchline / MIDI playback slots — allows repeated & overlapping same pitch. */
+  private seqVoices: Map<number, Voice> = new Map();
   private params: SynthParams;
   private workletReady = false;
   private workletFailed = false;
@@ -130,6 +133,19 @@ export class AudioEngine {
   private chorusSplit: ChannelSplitterNode;
   private chorusWet: GainNode;
   private chorusDry: GainNode;
+  private eqLow: BiquadFilterNode;
+  private eqMid: BiquadFilterNode;
+  private eqHigh: BiquadFilterNode;
+  private phaserStages: BiquadFilterNode[];
+  private phaserLfo: OscillatorNode;
+  private phaserLfoGain: GainNode;
+  private phaserWet: GainNode;
+  private phaserDry: GainNode;
+  private widthDelay: DelayNode;
+  private widthWet: GainNode;
+  private widthDry: GainNode;
+  private widthSplit: ChannelSplitterNode;
+  private widthMerge: ChannelMergerNode;
 
   private lfoNode: OscillatorNode | null = null;
   private lfo2Node: OscillatorNode | null = null;
@@ -239,6 +255,47 @@ export class AudioEngine {
     this.chorusDry = this.ctx.createGain();
     this.chorusDry.gain.value = 1 - this.params.effects.chorusMix;
 
+    this.eqLow = this.ctx.createBiquadFilter();
+    this.eqLow.type = 'lowshelf';
+    this.eqLow.frequency.value = 120;
+    this.eqLow.gain.value = this.params.effects.eqLow ?? 0;
+    this.eqMid = this.ctx.createBiquadFilter();
+    this.eqMid.type = 'peaking';
+    this.eqMid.frequency.value = 1000;
+    this.eqMid.Q.value = 0.8;
+    this.eqMid.gain.value = this.params.effects.eqMid ?? 0;
+    this.eqHigh = this.ctx.createBiquadFilter();
+    this.eqHigh.type = 'highshelf';
+    this.eqHigh.frequency.value = 8000;
+    this.eqHigh.gain.value = this.params.effects.eqHigh ?? 0;
+
+    this.phaserStages = [0, 1, 2, 3].map((i) => {
+      const ap = this.ctx.createBiquadFilter();
+      ap.type = 'allpass';
+      ap.frequency.value = 400 + i * 280;
+      ap.Q.value = 0.5;
+      return ap;
+    });
+    this.phaserLfo = this.ctx.createOscillator();
+    this.phaserLfo.type = 'sine';
+    this.phaserLfo.frequency.value = this.params.effects.phaserRate;
+    this.phaserLfoGain = this.ctx.createGain();
+    this.phaserLfoGain.gain.value = 700;
+    this.phaserLfo.connect(this.phaserLfoGain);
+    this.phaserStages.forEach((ap) => this.phaserLfoGain.connect(ap.frequency));
+    this.phaserLfo.start();
+    this.phaserWet = this.ctx.createGain();
+    this.phaserWet.gain.value = this.params.effects.phaserMix ?? 0;
+    this.phaserDry = this.ctx.createGain();
+    this.phaserDry.gain.value = 1 - (this.params.effects.phaserMix ?? 0);
+
+    this.widthDelay = this.ctx.createDelay(0.03);
+    this.widthDelay.delayTime.value = 0.008 * (this.params.effects.stereoWidth ?? 0.5);
+    this.widthWet = this.ctx.createGain();
+    this.widthDry = this.ctx.createGain();
+    this.widthSplit = this.ctx.createChannelSplitter(2);
+    this.widthMerge = this.ctx.createChannelMerger(2);
+
     this.lfoGain = this.ctx.createGain();
     this.lfoGain.gain.value = this.params.lfo.depth;
     this.lfo2Gain = this.ctx.createGain();
@@ -307,7 +364,27 @@ export class AudioEngine {
     this.chorusWet.connect(postChorus);
     this.chorusDry.connect(postChorus);
 
-    postChorus.connect(this.masterGain);
+    postChorus.connect(this.eqLow);
+    this.eqLow.connect(this.eqMid);
+    this.eqMid.connect(this.eqHigh);
+
+    this.eqHigh.connect(this.phaserStages[0]);
+    this.phaserStages[0].connect(this.phaserStages[1]);
+    this.phaserStages[1].connect(this.phaserStages[2]);
+    this.phaserStages[2].connect(this.phaserStages[3]);
+    this.phaserStages[3].connect(this.phaserWet);
+    this.eqHigh.connect(this.phaserDry);
+    const postPhaser = this.ctx.createGain();
+    this.phaserWet.connect(postPhaser);
+    this.phaserDry.connect(postPhaser);
+
+    postPhaser.connect(this.widthSplit);
+    this.widthSplit.connect(this.widthDry, 0);
+    this.widthSplit.connect(this.widthDelay, 1);
+    this.widthDelay.connect(this.widthWet);
+    this.widthDry.connect(this.widthMerge, 0, 0);
+    this.widthWet.connect(this.widthMerge, 0, 1);
+    this.widthMerge.connect(this.masterGain);
     this.masterGain.connect(this.masterCompressor);
     this.masterCompressor.connect(this.masterLimiter);
     this.masterLimiter.connect(this.analyserTime);
@@ -390,15 +467,27 @@ export class AudioEngine {
   }
 
   private stealOldest() {
-    let oldestNote = -1;
+    let oldestKey = -1;
     let oldestTime = Infinity;
-    this.voices.forEach((v, note) => {
+    let fromSeq = false;
+    this.voices.forEach((v, key) => {
       if (v.startTime < oldestTime) {
         oldestTime = v.startTime;
-        oldestNote = note;
+        oldestKey = key;
+        fromSeq = false;
       }
     });
-    if (oldestNote >= 0) this.killVoice(oldestNote);
+    this.seqVoices.forEach((v, key) => {
+      if (v.startTime < oldestTime) {
+        oldestTime = v.startTime;
+        oldestKey = key;
+        fromSeq = true;
+      }
+    });
+    if (oldestKey >= 0) {
+      if (fromSeq) this.killSeqVoice(oldestKey);
+      else this.killVoice(oldestKey);
+    }
   }
 
   private createFilterForVoice(): { node: AudioNode; worklet: AudioWorkletNode | null; a: BiquadFilterNode | null; b: BiquadFilterNode | null } {
@@ -540,14 +629,41 @@ export class AudioEngine {
     }
   }
 
-  noteOn(note: number, velocity: number = 0.8) {
-    if (this.ctx.state === 'suspended') this.ctx.resume();
+  noteOn(note: number, velocity: number = 0.8, when?: number, opts?: { speak?: boolean }) {
     if (this.voices.has(note)) this.killVoice(note);
-    if (this.voices.size >= MAX_VOICES) this.stealOldest();
+    this.spawnVoice(note, velocity, when, opts, this.voices, note);
+  }
+
+  /** Scheduled MIDI playback — unique slot per note instance. */
+  seqNoteOn(slot: number, note: number, velocity: number, when?: number, opts?: { speak?: boolean }) {
+    if (this.seqVoices.has(slot)) this.killSeqVoice(slot);
+    this.spawnVoice(note, velocity, when, opts, this.seqVoices, slot);
+  }
+
+  seqNoteOff(slot: number, when?: number) {
+    const voice = this.seqVoices.get(slot);
+    if (!voice || voice.released) return;
+    this.releaseVoiceFromMap(this.seqVoices, slot, when);
+  }
+
+  private spawnVoice(
+    note: number,
+    velocity: number,
+    when: number | undefined,
+    opts: { speak?: boolean } | undefined,
+    map: Map<number, Voice>,
+    mapKey: number,
+  ) {
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    if (this.voices.size + this.seqVoices.size >= MAX_VOICES) this.stealOldest();
 
     const freq = NOTE_FREQ(note);
-    const now = this.ctx.currentTime;
-    const { osc1, osc2, ampEnv } = this.params;
+    const now = Math.max(this.ctx.currentTime, when ?? this.ctx.currentTime);
+    const speak = !!opts?.speak;
+    const { osc1, osc2 } = this.params;
+    const ampEnv = speak
+      ? { attack: 0.004, decay: 0.06, sustain: 0.88, release: 0.09 }
+      : this.params.ampEnv;
     const glide = Math.max(0, this.params.glide);
 
     const voiceGain = this.ctx.createGain();
@@ -632,8 +748,8 @@ export class AudioEngine {
 
     let sampleNode: AudioBufferSourceNode | null = null;
     const sampleGain = this.ctx.createGain();
-    sampleGain.gain.value = this.params.sampleMix * velocity;
-    if (this.sampleBuffer && this.params.sampleMix > 0.005) {
+    sampleGain.gain.value = speak ? 0 : this.params.sampleMix * velocity;
+    if (!speak && this.sampleBuffer && this.params.sampleMix > 0.005) {
       sampleNode = this.ctx.createBufferSource();
       sampleNode.buffer = this.sampleBuffer;
       sampleNode.loop = true;
@@ -667,51 +783,77 @@ export class AudioEngine {
       fallbackA: filt.a,
       fallbackB: filt.b,
       lfoDisconnects: [],
-      note, velocity, startTime: now, released: false, sustained: false,
+      note, velocity, startTime: now, released: false, sustained: false, speak,
     };
 
     this.applyFilterParams(voice, now, true);
     this.connectVoiceMod(voice);
-    this.voices.set(note, voice);
+    map.set(mapKey, voice);
   }
 
-  noteOff(note: number, force = false) {
+  noteOff(note: number, force = false, when?: number) {
     const voice = this.voices.get(note);
     if (!voice || voice.released) return;
     if (this.sustainPedal && !force) {
       voice.sustained = true;
       return;
     }
-    this.releaseVoice(note);
+    this.releaseVoiceFromMap(this.voices, note, when);
   }
 
-  private releaseVoice(note: number) {
-    const voice = this.voices.get(note);
+  private releaseVoiceFromMap(map: Map<number, Voice>, key: number, when?: number) {
+    const voice = map.get(key);
     if (!voice || voice.released) return;
     voice.released = true;
-    const now = this.ctx.currentTime;
+    const now = Math.max(this.ctx.currentTime, when ?? this.ctx.currentTime);
     const { ampEnv, filterEnv } = this.params;
-    const rel = Math.max(ampEnv.release, 0.005);
-
-    voice.voiceGain.gain.cancelScheduledValues(now);
-    voice.voiceGain.gain.setValueAtTime(Math.max(voice.voiceGain.gain.value, 0.001), now);
-    safeExpRamp(voice.voiceGain.gain, 0.001, now + rel);
+    const rel = Math.max(voice.speak ? 0.09 : ampEnv.release, 0.005);
+    const g = voice.voiceGain.gain;
+    if (typeof g.cancelAndHoldAtTime === 'function') g.cancelAndHoldAtTime(now);
+    else {
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(Math.max(g.value, 0.001), now);
+    }
+    safeExpRamp(g, 0.001, now + rel);
 
     const f1 = trackedCutoffHz(this.params.filter.frequency, this.params.filter.keytrack, voice.note);
     const c1 = voice.worklet?.parameters.get('f1Cutoff') ?? voice.fallbackA?.frequency;
     if (c1) {
-      c1.cancelScheduledValues(now);
-      c1.setValueAtTime(Math.max(c1.value, 20), now);
-      safeExpRamp(c1, f1, now + Math.max(filterEnv.release, 0.005));
+      if (typeof c1.cancelAndHoldAtTime === 'function') c1.cancelAndHoldAtTime(now);
+      else {
+        c1.cancelScheduledValues(now);
+        c1.setValueAtTime(Math.max(c1.value, 20), now);
+      }
+      safeExpRamp(c1, f1, now + Math.max(voice.speak ? 0.05 : filterEnv.release, 0.005));
     }
 
-    const cleanup = (Math.max(ampEnv.release, filterEnv.release) + 0.12) * 1000;
-    window.setTimeout(() => this.killVoice(note), cleanup);
+    const wait = Math.max(0, now - this.ctx.currentTime) + Math.max(rel, filterEnv.release) + 0.12;
+    const isSeq = map === this.seqVoices;
+    window.setTimeout(() => {
+      if (isSeq) this.killSeqVoice(key);
+      else this.killVoice(key);
+    }, wait * 1000);
+  }
+
+  private releaseVoice(note: number, when?: number) {
+    this.releaseVoiceFromMap(this.voices, note, when);
   }
 
   private killVoice(note: number) {
     const voice = this.voices.get(note);
     if (!voice) return;
+    this.disposeVoice(voice);
+    this.voices.delete(note);
+  }
+
+  private killSeqVoice(slot: number) {
+    const voice = this.seqVoices.get(slot);
+    if (!voice) return;
+    this.disposeVoice(voice);
+    this.seqVoices.delete(slot);
+  }
+
+  private disposeVoice(voice: Voice) {
     try {
       for (const { src, dest } of voice.lfoDisconnects) {
         try { src.disconnect(dest as AudioParam); } catch { /* */ }
@@ -733,7 +875,6 @@ export class AudioEngine {
       voice.fallbackA?.disconnect();
       voice.fallbackB?.disconnect();
     } catch { /* */ }
-    this.voices.delete(note);
   }
 
   updateParams(params: SynthParams) {
@@ -760,6 +901,13 @@ export class AudioEngine {
     this.chorusLfoR.frequency.linearRampToValueAtTime(p.effects.chorusRate * 1.17, now + 0.02);
     this.chorusLfoGainL.gain.linearRampToValueAtTime(0.003 * p.effects.chorusDepth, now + 0.02);
     this.chorusLfoGainR.gain.linearRampToValueAtTime(0.003 * p.effects.chorusDepth, now + 0.02);
+    this.eqLow.gain.linearRampToValueAtTime(p.effects.eqLow, now + 0.03);
+    this.eqMid.gain.linearRampToValueAtTime(p.effects.eqMid, now + 0.03);
+    this.eqHigh.gain.linearRampToValueAtTime(p.effects.eqHigh, now + 0.03);
+    this.phaserWet.gain.linearRampToValueAtTime(p.effects.phaserMix, now + 0.02);
+    this.phaserDry.gain.linearRampToValueAtTime(1 - p.effects.phaserMix, now + 0.02);
+    this.phaserLfo.frequency.linearRampToValueAtTime(p.effects.phaserRate, now + 0.02);
+    this.widthDelay.delayTime.linearRampToValueAtTime(0.002 + p.effects.stereoWidth * 0.012, now + 0.03);
 
     if (this.lfoNode) {
       this.lfoNode.frequency.linearRampToValueAtTime(p.lfo.rate, now + 0.02);
@@ -835,7 +983,9 @@ export class AudioEngine {
 
   panic() {
     this.voices.forEach((_, note) => this.killVoice(note));
+    this.seqVoices.forEach((_, slot) => this.killSeqVoice(slot));
     this.voices.clear();
+    this.seqVoices.clear();
     this.sustainPedal = false;
   }
 
@@ -850,6 +1000,7 @@ export class AudioEngine {
     if (this.lfo2Node) { try { this.lfo2Node.stop(); } catch { /* */ } }
     try { this.chorusLfoL.stop(); } catch { /* */ }
     try { this.chorusLfoR.stop(); } catch { /* */ }
+    try { this.phaserLfo.stop(); } catch { /* */ }
     try { this.followerDrive.stop(); } catch { /* */ }
     this.ctx.close();
   }
