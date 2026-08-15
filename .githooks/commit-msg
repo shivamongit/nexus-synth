@@ -1,0 +1,6 @@
+#!/bin/sh
+# Final pass: strip Cursor attribution before commit is finalized.
+COMMIT_MSG_FILE=$1
+[ -f "$COMMIT_MSG_FILE" ] || exit 0
+grep -viE 'cursoragent@cursor\.com|^co-authored-by: cursor|^made-with: cursor' "$COMMIT_MSG_FILE" > "${COMMIT_MSG_FILE}.tmp" \
+  && mv "${COMMIT_MSG_FILE}.tmp" "$COMMIT_MSG_FILE"
