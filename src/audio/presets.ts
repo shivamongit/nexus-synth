@@ -1,4 +1,4 @@
-import type { SynthParams } from './AudioEngine';
+import { defaultFilter, defaultModMatrix, type FilterConfig, type SynthParams } from './types';
 
 export interface Preset {
   name: string;
@@ -9,7 +9,11 @@ export interface Preset {
 const BASE: SynthParams = {
   osc1: { waveform: 'sawtooth', detune: 0, gain: 0.5, octave: 0, semi: 0, unison: 1, unisonSpread: 0 },
   osc2: { waveform: 'square', detune: 0, gain: 0, octave: 0, semi: 0, unison: 1, unisonSpread: 0 },
-  filter: { type: 'lowpass', frequency: 8000, resonance: 1, envAmount: 0 },
+  filter: defaultFilter({ type: 'lowpass', frequency: 8000, resonance: 0.2, envAmount: 0, slope: 24, model: 'svf', enabled: true }),
+  filter2: defaultFilter({ type: 'highpass', frequency: 80, resonance: 0.1, envAmount: 0, slope: 12, enabled: false }),
+  filterRouting: 'serial',
+  filterMix: 0.5,
+  filterSpread: 0,
   ampEnv: { attack: 0.01, decay: 0.3, sustain: 0.7, release: 0.3 },
   filterEnv: { attack: 0.01, decay: 0.3, sustain: 0.5, release: 0.3 },
   effects: {
@@ -19,39 +23,44 @@ const BASE: SynthParams = {
     chorusRate: 1, chorusDepth: 0.5, chorusMix: 0,
   },
   lfo: { rate: 2, depth: 0, waveform: 'sine', target: 'filter' },
+  lfo2: { rate: 0.4, depth: 0, waveform: 'triangle', target: 'filter2' },
+  modMatrix: defaultModMatrix(),
   masterGain: 0.6,
   glide: 0,
   noiseLevel: 0,
   drive: 0.15,
+  sampleMix: 0,
 };
 
-function merge(overrides: Partial<SynthParams> & Record<string, any>): SynthParams {
+function merge(overrides: Record<string, unknown> & Partial<Omit<SynthParams, 'filter' | 'filter2'>> & {
+  filter?: Partial<FilterConfig>;
+  filter2?: Partial<FilterConfig>;
+}): SynthParams {
   return {
     ...BASE,
     ...overrides,
     osc1: { ...BASE.osc1, ...(overrides.osc1 || {}) },
     osc2: { ...BASE.osc2, ...(overrides.osc2 || {}) },
-    filter: { ...BASE.filter, ...(overrides.filter || {}) },
+    filter: defaultFilter({ ...BASE.filter, ...(overrides.filter || {}) }),
+    filter2: defaultFilter({ ...BASE.filter2, ...(overrides.filter2 || {}) }),
     ampEnv: { ...BASE.ampEnv, ...(overrides.ampEnv || {}) },
     filterEnv: { ...BASE.filterEnv, ...(overrides.filterEnv || {}) },
     effects: { ...BASE.effects, ...(overrides.effects || {}) },
     lfo: { ...BASE.lfo, ...(overrides.lfo || {}) },
+    lfo2: { ...BASE.lfo2, ...(overrides.lfo2 || {}) },
+    modMatrix: overrides.modMatrix || BASE.modMatrix.map((r) => ({ ...r })),
   };
 }
 
 export const PRESETS: Preset[] = [
-  {
-    name: 'INIT',
-    category: 'Init',
-    params: { ...BASE },
-  },
+  { name: 'INIT', category: 'Init', params: { ...BASE } },
   {
     name: 'Hypersaw Lead',
     category: 'Lead',
     params: merge({
       osc1: { waveform: 'sawtooth', detune: 0, gain: 0.5, octave: 0, semi: 0, unison: 5, unisonSpread: 25 },
       osc2: { waveform: 'sawtooth', detune: 7, gain: 0.3, octave: 1, semi: 0, unison: 3, unisonSpread: 15 },
-      filter: { type: 'lowpass', frequency: 4000, resonance: 3, envAmount: 0.6 },
+      filter: { type: 'lowpass', frequency: 4000, resonance: 0.25, envAmount: 0.6, slope: 24, model: 'svf' },
       ampEnv: { attack: 0.01, decay: 0.2, sustain: 0.8, release: 0.4 },
       filterEnv: { attack: 0.005, decay: 0.3, sustain: 0.4, release: 0.5 },
       effects: { ...BASE.effects, reverbMix: 0.15, reverbDecay: 1.8, delayMix: 0.12, delayTime: 0.375, delayFeedback: 0.35 },
@@ -63,7 +72,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'sine', detune: 0, gain: 0.7, octave: -1, semi: 0, unison: 1, unisonSpread: 0 },
       osc2: { waveform: 'square', detune: 0, gain: 0.2, octave: 0, semi: 0, unison: 1, unisonSpread: 0 },
-      filter: { type: 'lowpass', frequency: 400, resonance: 2, envAmount: 0.4 },
+      filter: { type: 'lowpass', frequency: 400, resonance: 0.2, envAmount: 0.4, model: 'ladder', slope: 24 },
       ampEnv: { attack: 0.005, decay: 0.4, sustain: 0.9, release: 0.15 },
       filterEnv: { attack: 0.005, decay: 0.5, sustain: 0.2, release: 0.2 },
       effects: { ...BASE.effects, distortionDrive: 0.15, distortionMix: 0.2 },
@@ -75,7 +84,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'sawtooth', detune: -5, gain: 0.35, octave: 0, semi: 0, unison: 4, unisonSpread: 30 },
       osc2: { waveform: 'triangle', detune: 5, gain: 0.35, octave: 0, semi: 7, unison: 3, unisonSpread: 20 },
-      filter: { type: 'lowpass', frequency: 2500, resonance: 2, envAmount: 0.3 },
+      filter: { type: 'lowpass', frequency: 2500, resonance: 0.15, envAmount: 0.3, slope: 24 },
       ampEnv: { attack: 1.2, decay: 1.5, sustain: 0.7, release: 3.0 },
       filterEnv: { attack: 1.0, decay: 2.0, sustain: 0.5, release: 2.5 },
       effects: { ...BASE.effects, reverbMix: 0.5, reverbDecay: 3.0, chorusMix: 0.3, chorusRate: 0.5, chorusDepth: 0.7 },
@@ -89,7 +98,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'triangle', detune: 0, gain: 0.5, octave: 0, semi: 0, unison: 2, unisonSpread: 8 },
       osc2: { waveform: 'sine', detune: 0, gain: 0.3, octave: 1, semi: 0, unison: 1, unisonSpread: 0 },
-      filter: { type: 'lowpass', frequency: 6000, resonance: 4, envAmount: 0.8 },
+      filter: { type: 'lowpass', frequency: 6000, resonance: 0.3, envAmount: 0.8, slope: 24 },
       ampEnv: { attack: 0.002, decay: 0.5, sustain: 0.0, release: 0.8 },
       filterEnv: { attack: 0.001, decay: 0.4, sustain: 0.0, release: 0.6 },
       effects: { ...BASE.effects, reverbMix: 0.3, reverbDecay: 2.0, delayMix: 0.2, delayTime: 0.25, delayFeedback: 0.4 },
@@ -101,7 +110,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'sawtooth', detune: -12, gain: 0.5, octave: -1, semi: 0, unison: 2, unisonSpread: 10 },
       osc2: { waveform: 'sawtooth', detune: 12, gain: 0.5, octave: -1, semi: 0, unison: 2, unisonSpread: 10 },
-      filter: { type: 'lowpass', frequency: 1200, resonance: 5, envAmount: 0.3 },
+      filter: { type: 'lowpass', frequency: 1200, resonance: 0.35, envAmount: 0.3, model: 'ladder' },
       ampEnv: { attack: 0.01, decay: 0.3, sustain: 0.9, release: 0.2 },
       filterEnv: { attack: 0.01, decay: 0.6, sustain: 0.3, release: 0.3 },
       lfo: { rate: 0.15, depth: 300, waveform: 'sine', target: 'filter' },
@@ -114,7 +123,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'sawtooth', detune: 0, gain: 0.6, octave: 0, semi: 0, unison: 1, unisonSpread: 0 },
       osc2: { waveform: 'square', detune: 0, gain: 0.0, octave: 0, semi: 0, unison: 1, unisonSpread: 0 },
-      filter: { type: 'lowpass', frequency: 300, resonance: 15, envAmount: 0.9 },
+      filter: { type: 'lowpass', frequency: 300, resonance: 0.82, envAmount: 0.9, model: 'ladder', slope: 24, drive: 0.45 },
       ampEnv: { attack: 0.002, decay: 0.2, sustain: 0.5, release: 0.1 },
       filterEnv: { attack: 0.002, decay: 0.15, sustain: 0.05, release: 0.1 },
       effects: { ...BASE.effects, distortionDrive: 0.4, distortionMix: 0.3, delayMix: 0.15, delayTime: 0.188, delayFeedback: 0.5 },
@@ -126,7 +135,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'triangle', detune: -3, gain: 0.45, octave: 0, semi: 0, unison: 2, unisonSpread: 6 },
       osc2: { waveform: 'sine', detune: 3, gain: 0.35, octave: 0, semi: 0, unison: 1, unisonSpread: 0 },
-      filter: { type: 'lowpass', frequency: 3500, resonance: 1, envAmount: 0.4 },
+      filter: { type: 'lowpass', frequency: 3500, resonance: 0.12, envAmount: 0.4 },
       ampEnv: { attack: 0.008, decay: 0.8, sustain: 0.4, release: 0.5 },
       filterEnv: { attack: 0.005, decay: 0.6, sustain: 0.2, release: 0.4 },
       effects: { ...BASE.effects, reverbMix: 0.2, reverbDecay: 1.5, chorusMix: 0.15, chorusRate: 0.8, chorusDepth: 0.4 },
@@ -138,7 +147,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'sawtooth', detune: 0, gain: 0.2, octave: 1, semi: 0, unison: 3, unisonSpread: 40 },
       osc2: { waveform: 'square', detune: 0, gain: 0.15, octave: 2, semi: 7, unison: 2, unisonSpread: 50 },
-      filter: { type: 'bandpass', frequency: 2000, resonance: 8, envAmount: 0.7 },
+      filter: { type: 'bandpass', frequency: 2000, resonance: 0.45, envAmount: 0.7 },
       ampEnv: { attack: 2.0, decay: 0.5, sustain: 0.8, release: 1.5 },
       filterEnv: { attack: 3.0, decay: 1.0, sustain: 0.9, release: 1.0 },
       noiseLevel: 0.15,
@@ -152,21 +161,19 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'square', detune: 0, gain: 0.4, octave: 0, semi: 0, unison: 2, unisonSpread: 12 },
       osc2: { waveform: 'sawtooth', detune: 0, gain: 0.3, octave: 1, semi: 0, unison: 1, unisonSpread: 0 },
-      filter: { type: 'lowpass', frequency: 5000, resonance: 4, envAmount: 0.5 },
+      filter: { type: 'lowpass', frequency: 5000, resonance: 0.3, envAmount: 0.5 },
       ampEnv: { attack: 0.002, decay: 0.15, sustain: 0.0, release: 0.2 },
       filterEnv: { attack: 0.001, decay: 0.12, sustain: 0.0, release: 0.15 },
       effects: { ...BASE.effects, delayMix: 0.35, delayTime: 0.167, delayFeedback: 0.55, reverbMix: 0.2, reverbDecay: 1.2 },
     }),
   },
-
-  // ─── Production-grade additions ──────────────────────────────────────
   {
     name: 'Trance Supersaw',
     category: 'Lead',
     params: merge({
       osc1: { waveform: 'sawtooth', detune: -8, gain: 0.5, octave: 0, semi: 0, unison: 7, unisonSpread: 35 },
       osc2: { waveform: 'sawtooth', detune: 8, gain: 0.4, octave: -1, semi: 0, unison: 5, unisonSpread: 22 },
-      filter: { type: 'lowpass', frequency: 5500, resonance: 2, envAmount: 0.5 },
+      filter: { type: 'lowpass', frequency: 5500, resonance: 0.18, envAmount: 0.5, slope: 24 },
       ampEnv: { attack: 0.02, decay: 0.4, sustain: 0.85, release: 0.6 },
       filterEnv: { attack: 0.005, decay: 0.4, sustain: 0.6, release: 0.5 },
       effects: { ...BASE.effects, reverbMix: 0.28, reverbDecay: 2.2, delayMix: 0.18, delayTime: 0.375, delayFeedback: 0.4, chorusMix: 0.25, chorusRate: 0.7, chorusDepth: 0.6 },
@@ -179,7 +186,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'sawtooth', detune: 0, gain: 0.55, octave: -1, semi: 0, unison: 3, unisonSpread: 18 },
       osc2: { waveform: 'square', detune: 0, gain: 0.3, octave: -1, semi: 12, unison: 1, unisonSpread: 0 },
-      filter: { type: 'lowpass', frequency: 600, resonance: 8, envAmount: 0.5 },
+      filter: { type: 'lowpass', frequency: 600, resonance: 0.55, envAmount: 0.5, model: 'ladder', drive: 0.3 },
       ampEnv: { attack: 0.005, decay: 0.3, sustain: 0.9, release: 0.2 },
       filterEnv: { attack: 0.005, decay: 0.3, sustain: 0.3, release: 0.3 },
       lfo: { rate: 4, depth: 1800, waveform: 'sine', target: 'filter' },
@@ -193,7 +200,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'sawtooth', detune: -12, gain: 0.5, octave: -1, semi: 0, unison: 3, unisonSpread: 25 },
       osc2: { waveform: 'square', detune: 12, gain: 0.45, octave: 0, semi: 7, unison: 3, unisonSpread: 15 },
-      filter: { type: 'lowpass', frequency: 900, resonance: 12, envAmount: 0.65 },
+      filter: { type: 'lowpass', frequency: 900, resonance: 0.65, envAmount: 0.65, model: 'ladder', drive: 0.4 },
       ampEnv: { attack: 0.003, decay: 0.25, sustain: 0.85, release: 0.15 },
       filterEnv: { attack: 0.003, decay: 0.3, sustain: 0.4, release: 0.2 },
       lfo: { rate: 6, depth: 700, waveform: 'square', target: 'filter' },
@@ -207,7 +214,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'sawtooth', detune: -7, gain: 0.3, octave: 0, semi: 0, unison: 5, unisonSpread: 50 },
       osc2: { waveform: 'triangle', detune: 7, gain: 0.3, octave: 1, semi: 5, unison: 3, unisonSpread: 40 },
-      filter: { type: 'lowpass', frequency: 1800, resonance: 1, envAmount: 0.2 },
+      filter: { type: 'lowpass', frequency: 1800, resonance: 0.1, envAmount: 0.2 },
       ampEnv: { attack: 2.5, decay: 2.0, sustain: 0.8, release: 5.0 },
       filterEnv: { attack: 3.0, decay: 3.0, sustain: 0.6, release: 4.0 },
       lfo: { rate: 0.15, depth: 300, waveform: 'sine', target: 'filter' },
@@ -221,7 +228,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'sine', detune: 0, gain: 0.6, octave: 0, semi: 0, unison: 1, unisonSpread: 0 },
       osc2: { waveform: 'sine', detune: 0, gain: 0.25, octave: 2, semi: 7, unison: 1, unisonSpread: 0 },
-      filter: { type: 'highpass', frequency: 120, resonance: 0.5, envAmount: 0 },
+      filter: { type: 'highpass', frequency: 120, resonance: 0.08, envAmount: 0 },
       ampEnv: { attack: 0.002, decay: 1.8, sustain: 0.0, release: 1.5 },
       filterEnv: { attack: 0.001, decay: 1.0, sustain: 0.0, release: 0.8 },
       effects: { ...BASE.effects, reverbMix: 0.45, reverbDecay: 3.5, delayMix: 0.22, delayTime: 0.333, delayFeedback: 0.45, chorusMix: 0.15, chorusRate: 1.2, chorusDepth: 0.3 },
@@ -234,7 +241,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'sawtooth', detune: -4, gain: 0.5, octave: 0, semi: 0, unison: 3, unisonSpread: 15 },
       osc2: { waveform: 'square', detune: 4, gain: 0.3, octave: 0, semi: 0, unison: 2, unisonSpread: 8 },
-      filter: { type: 'bandpass', frequency: 2500, resonance: 6, envAmount: 0.6 },
+      filter: { type: 'bandpass', frequency: 2500, resonance: 0.4, envAmount: 0.6 },
       ampEnv: { attack: 0.003, decay: 0.35, sustain: 0.15, release: 0.4 },
       filterEnv: { attack: 0.002, decay: 0.3, sustain: 0.1, release: 0.3 },
       lfo: { rate: 0.8, depth: 1500, waveform: 'sine', target: 'filter' },
@@ -247,7 +254,7 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'sawtooth', detune: -3, gain: 0.5, octave: 0, semi: 0, unison: 2, unisonSpread: 10 },
       osc2: { waveform: 'sawtooth', detune: 3, gain: 0.4, octave: 0, semi: 7, unison: 2, unisonSpread: 10 },
-      filter: { type: 'lowpass', frequency: 2400, resonance: 2, envAmount: 0.35 },
+      filter: { type: 'lowpass', frequency: 2400, resonance: 0.18, envAmount: 0.35 },
       ampEnv: { attack: 0.08, decay: 0.3, sustain: 0.7, release: 0.25 },
       filterEnv: { attack: 0.04, decay: 0.3, sustain: 0.4, release: 0.3 },
       effects: { ...BASE.effects, reverbMix: 0.2, reverbDecay: 1.6, chorusMix: 0.25, chorusRate: 0.9, chorusDepth: 0.5, distortionDrive: 0.15, distortionMix: 0.12 },
@@ -260,10 +267,29 @@ export const PRESETS: Preset[] = [
     params: merge({
       osc1: { waveform: 'sawtooth', detune: 0, gain: 0.45, octave: 0, semi: 0, unison: 4, unisonSpread: 20 },
       osc2: { waveform: 'triangle', detune: 0, gain: 0.35, octave: 1, semi: 0, unison: 2, unisonSpread: 10 },
-      filter: { type: 'lowpass', frequency: 5500, resonance: 5, envAmount: 0.75 },
+      filter: { type: 'lowpass', frequency: 5500, resonance: 0.35, envAmount: 0.75 },
       ampEnv: { attack: 0.002, decay: 0.4, sustain: 0.0, release: 0.5 },
       filterEnv: { attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.35 },
       effects: { ...BASE.effects, reverbMix: 0.3, reverbDecay: 1.8, delayMix: 0.32, delayTime: 0.25, delayFeedback: 0.55, chorusMix: 0.2, chorusRate: 0.8, chorusDepth: 0.5 },
+    }),
+  },
+  {
+    name: 'Voice Pattern',
+    category: 'FX',
+    params: merge({
+      osc1: { waveform: 'sawtooth', detune: -4, gain: 0.25, octave: 0, semi: 0, unison: 3, unisonSpread: 12 },
+      osc2: { waveform: 'triangle', detune: 4, gain: 0.2, octave: 0, semi: 0, unison: 1, unisonSpread: 0 },
+      filter: { type: 'lowpass', frequency: 2200, resonance: 0.35, envAmount: 0.45, model: 'svf', slope: 24, drive: 0.2, keytrack: 0.4 },
+      filter2: { type: 'highpass', frequency: 120, resonance: 0.1, enabled: true, slope: 12 },
+      filterRouting: 'serial',
+      filterMix: 1,
+      ampEnv: { attack: 0.005, decay: 0.2, sustain: 0.7, release: 0.15 },
+      filterEnv: { attack: 0.01, decay: 0.18, sustain: 0.25, release: 0.12 },
+      lfo: { rate: 5.5, depth: 400, waveform: 'sine', target: 'filter' },
+      lfo2: { rate: 0.35, depth: 180, waveform: 'triangle', target: 'filter2' },
+      sampleMix: 0.65,
+      drive: 0.22,
+      effects: { ...BASE.effects, reverbMix: 0.22, reverbDecay: 1.6, delayMix: 0.18, delayTime: 0.188, delayFeedback: 0.4, chorusMix: 0.12, chorusDepth: 0.45 },
     }),
   },
 ];

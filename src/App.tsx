@@ -1,29 +1,32 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { AudioEngine, type SynthParams, type WaveformType, type FilterType } from './audio/AudioEngine';
+import { AudioEngine, type SynthParams, type WaveformType, type FilterType, type FilterModel, type LfoTarget } from './audio/AudioEngine';
 import { MidiEngine, type MidiDevice } from './audio/MidiEngine';
 import { PRESETS, DEFAULT_PARAMS } from './audio/presets';
+import { hydrateParams, type ModDest, type ModSource } from './audio/types';
 import { initAnalytics, trackEvent, incrementLocalCounter, getActiveProviders } from './lib/analytics';
 import { isEmbedded, getBootPreset, listenHost, postToHost } from './lib/embed';
 import Knob from './components/Knob';
 import Visualizer from './components/Visualizer';
 import Keyboard from './components/Keyboard';
-import Sequencer from './components/Sequencer';
+import Sequencer, { type SeqCell } from './components/Sequencer';
 import MidiIndicator from './components/MidiIndicator';
 import PeakMeter from './components/PeakMeter';
 import PresetBrowser from './components/PresetBrowser';
+import CaptureStudio from './components/CaptureStudio';
 
-type ViewMode = 'synth' | 'sequencer';
+type ViewMode = 'synth' | 'sequencer' | 'voice';
 
 const WAVEFORMS: WaveformType[] = ['sine', 'sawtooth', 'square', 'triangle'];
 const WAVE_ICONS: Record<WaveformType, string> = {
   sine: '∿', sawtooth: '⩘', square: '⊓', triangle: '△',
 };
-const FILTER_TYPES: FilterType[] = ['lowpass', 'highpass', 'bandpass', 'notch'];
+const FILTER_TYPES: FilterType[] = ['lowpass', 'highpass', 'bandpass', 'notch', 'peak'];
 const FILTER_LABELS: Record<FilterType, string> = {
-  lowpass: 'LP', highpass: 'HP', bandpass: 'BP', notch: 'NT',
+  lowpass: 'LP', highpass: 'HP', bandpass: 'BP', notch: 'NT', peak: 'PK',
 };
+const LFO_TARGETS: LfoTarget[] = ['filter', 'filter2', 'pitch', 'amp', 'drive', 'res'];
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 
 function deepClone<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj));
@@ -31,13 +34,16 @@ function deepClone<T>(obj: T): T {
 
 const App: React.FC = () => {
   const embedded = isEmbedded();
-  const [params, setParams] = useState<SynthParams>(deepClone(DEFAULT_PARAMS));
+  const [params, setParams] = useState<SynthParams>(() => hydrateParams(deepClone(DEFAULT_PARAMS)));
   const [presetIdx, setPresetIdx] = useState(0);
   const [engine, setEngine] = useState<AudioEngine | null>(null);
   const [activeNotes, setActiveNotes] = useState<Set<number>>(new Set());
   const [octave, setOctave] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>('synth');
   const [vizMode, setVizMode] = useState<'oscilloscope' | 'spectrum'>('oscilloscope');
+  const [seqPattern, setSeqPattern] = useState<SeqCell[][] | null>(null);
+  const [seqPatternId, setSeqPatternId] = useState(0);
+  const [followFilter, setFollowFilter] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
 
   // MIDI state
@@ -64,7 +70,7 @@ const App: React.FC = () => {
     const boot = getBootPreset();
     if (boot !== null && boot >= 0 && boot < PRESETS.length) {
       setPresetIdx(boot);
-      setParams(deepClone(PRESETS[boot].params));
+      setParams(hydrateParams(deepClone(PRESETS[boot].params)));
     }
   }, []);
 
@@ -74,6 +80,7 @@ const App: React.FC = () => {
     engineRef.current = eng;
     setEngine(eng);
     setIsInitialized(true);
+    void eng.attachWorklet();
     trackEvent('audio_started', { sample_rate: eng.ctx.sampleRate });
     postToHost({ type: 'nexus:ready', version: APP_VERSION });
     return eng;
@@ -117,7 +124,7 @@ const App: React.FC = () => {
   const loadPreset = useCallback((idx: number) => {
     if (idx < 0 || idx >= PRESETS.length) return;
     setPresetIdx(idx);
-    const p = deepClone(PRESETS[idx].params);
+    const p = hydrateParams(deepClone(PRESETS[idx].params));
     setParams(p);
     if (engineRef.current) {
       engineRef.current.updateParams(p);
@@ -248,7 +255,7 @@ const App: React.FC = () => {
             <>
               <div className="h-4 w-px bg-nexus-border" />
               <div className="flex items-center gap-1">
-                {(['synth', 'sequencer'] as const).map(mode => (
+                {(['synth', 'sequencer', 'voice'] as const).map(mode => (
                   <button
                     key={mode}
                     onClick={() => setViewMode(mode)}
@@ -373,32 +380,100 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* FILTER + DRIVE */}
-              <div className="panel w-[220px] flex-shrink-0">
+              {/* FILTER A + B */}
+              <div className="panel w-[280px] flex-shrink-0 overflow-y-auto">
                 <div className="panel-header flex items-center justify-between">
-                  <span>FILTER</span>
+                  <span>FILTER 1 {engine?.workletActive ? 'ZDF' : 'BQ'}</span>
                   <div className="flex gap-0.5">
-                    {FILTER_TYPES.map(ft => (
+                    {(['svf', 'ladder'] as FilterModel[]).map(m => (
                       <button
-                        key={ft}
-                        onClick={() => updateParam('filter', 'type', ft)}
-                        className={`text-[8px] px-1.5 py-0.5 rounded transition-all ${
-                          params.filter.type === ft
+                        key={m}
+                        onClick={() => updateParam('filter', 'model', m)}
+                        className={`text-[8px] px-1.5 py-0.5 rounded uppercase ${
+                          params.filter.model === m
                             ? 'text-nexus-warm bg-nexus-warm/10 border border-nexus-warm/30'
-                            : 'text-nexus-text-muted hover:text-nexus-text-dim'
+                            : 'text-nexus-text-muted'
                         }`}
                       >
-                        {FILTER_LABELS[ft]}
+                        {m === 'svf' ? 'SVF' : 'LAD'}
                       </button>
                     ))}
                   </div>
                 </div>
-                <div className="p-3 flex flex-wrap gap-2 items-start">
-                  <Knob label="CUTOFF" value={params.filter.frequency} min={20} max={20000} step={1} unit="Hz" color="#ff6b35" onChange={v => updateParam('filter', 'frequency', v)} />
-                  <Knob label="RESO" value={params.filter.resonance} min={0} max={20} step={0.1} color="#ff6b35" onChange={v => updateParam('filter', 'resonance', v)} />
-                  <Knob label="ENV" value={params.filter.envAmount} min={0} max={1} color="#ff6b35" onChange={v => updateParam('filter', 'envAmount', v)} />
+                <div className="px-2 pt-1 flex gap-0.5 flex-wrap">
+                  {FILTER_TYPES.map(ft => (
+                    <button
+                      key={ft}
+                      onClick={() => updateParam('filter', 'type', ft)}
+                      className={`text-[8px] px-1.5 py-0.5 rounded ${
+                        params.filter.type === ft
+                          ? 'text-nexus-warm bg-nexus-warm/10 border border-nexus-warm/30'
+                          : 'text-nexus-text-muted'
+                      }`}
+                    >
+                      {FILTER_LABELS[ft]}
+                    </button>
+                  ))}
+                  {([12, 24] as const).map(s => (
+                    <button
+                      key={s}
+                      onClick={() => updateParam('filter', 'slope', s)}
+                      className={`text-[8px] px-1.5 py-0.5 rounded ${
+                        params.filter.slope === s ? 'text-nexus-accent bg-nexus-accent/10' : 'text-nexus-text-muted'
+                      }`}
+                    >
+                      {s}dB
+                    </button>
+                  ))}
+                </div>
+                <div className="p-2 flex flex-wrap gap-1.5 items-start">
+                  <Knob label="CUT 1" value={params.filter.frequency} min={20} max={20000} step={1} unit="Hz" color="#ff6b35" onChange={v => updateParam('filter', 'frequency', v)} />
+                  <Knob label="RES 1" value={params.filter.resonance} min={0} max={1} step={0.01} color="#ff6b35" onChange={v => updateParam('filter', 'resonance', v)} />
+                  <Knob label="ENV" value={params.filter.envAmount} min={-1} max={1} color="#ff6b35" onChange={v => updateParam('filter', 'envAmount', v)} />
+                  <Knob label="DRV 1" value={params.filter.drive} min={0} max={1} color="#ffbf3f" onChange={v => updateParam('filter', 'drive', v)} />
+                  <Knob label="KEY" value={params.filter.keytrack} min={0} max={1} color="#ff6b35" onChange={v => updateParam('filter', 'keytrack', v)} />
                   <Knob label="DRIVE" value={params.drive ?? 0.15} min={0} max={1} color="#ffbf3f" onChange={v => updateParam('drive', '', v)} />
                   <Knob label="NOISE" value={params.noiseLevel} min={0} max={0.5} color="#ff6b35" onChange={v => updateParam('noiseLevel', '', v)} />
+                  <Knob label="GLIDE" value={params.glide} min={0} max={1} unit="s" onChange={v => updateParam('glide', '', v)} />
+                </div>
+                <div className="panel-header flex items-center justify-between border-t">
+                  <span>FILTER 2</span>
+                  <div className="flex gap-0.5 items-center">
+                    <button
+                      onClick={() => updateParam('filter2', 'enabled', params.filter2.enabled ? 0 : 1)}
+                      className={`text-[8px] px-1.5 py-0.5 rounded ${params.filter2.enabled ? 'text-nexus-accent' : 'text-nexus-text-muted'}`}
+                    >
+                      {params.filter2.enabled ? 'ON' : 'OFF'}
+                    </button>
+                    {(['serial', 'parallel'] as const).map(r => (
+                      <button
+                        key={r}
+                        onClick={() => updateParam('filterRouting', '', r)}
+                        className={`text-[8px] px-1 py-0.5 rounded uppercase ${
+                          params.filterRouting === r ? 'text-nexus-accent' : 'text-nexus-text-muted'
+                        }`}
+                      >
+                        {r === 'serial' ? 'SER' : 'PAR'}
+                      </button>
+                    ))}
+                    {(['svf', 'ladder'] as FilterModel[]).map(m => (
+                      <button
+                        key={m}
+                        onClick={() => updateParam('filter2', 'model', m)}
+                        className={`text-[8px] px-1 py-0.5 rounded ${
+                          params.filter2.model === m ? 'text-nexus-warm' : 'text-nexus-text-muted'
+                        }`}
+                      >
+                        {m === 'svf' ? 'SVF' : 'LAD'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="p-2 flex flex-wrap gap-1.5">
+                  <Knob label="CUT 2" value={params.filter2.frequency} min={20} max={20000} step={1} unit="Hz" color="#a855f7" onChange={v => updateParam('filter2', 'frequency', v)} />
+                  <Knob label="RES 2" value={params.filter2.resonance} min={0} max={1} color="#a855f7" onChange={v => updateParam('filter2', 'resonance', v)} />
+                  <Knob label="MIX" value={params.filterMix} min={0} max={1} color="#a855f7" onChange={v => updateParam('filterMix', '', v)} />
+                  <Knob label="SPREAD" value={params.filterSpread} min={0} max={50} unit="ct" color="#a855f7" onChange={v => updateParam('filterSpread', '', v)} />
                 </div>
               </div>
             </div>
@@ -429,7 +504,7 @@ const App: React.FC = () => {
                 <div className="panel-header flex items-center justify-between">
                   <span>LFO</span>
                   <div className="flex gap-0.5">
-                    {(['filter', 'pitch', 'amp'] as const).map(t => (
+                    {LFO_TARGETS.map(t => (
                       <button
                         key={t}
                         onClick={() => updateParam('lfo', 'target', t)}
@@ -439,7 +514,7 @@ const App: React.FC = () => {
                             : 'text-nexus-text-muted hover:text-nexus-text-dim'
                         }`}
                       >
-                        {t}
+                        {t === 'filter2' ? 'F2' : t.slice(0, 3)}
                       </button>
                     ))}
                   </div>
@@ -457,6 +532,98 @@ const App: React.FC = () => {
                 </div>
               </div>
 
+              <div className="panel w-[200px] flex-shrink-0">
+                <div className="panel-header flex items-center justify-between">
+                  <span>LFO 2</span>
+                  <div className="flex gap-0.5">
+                    {LFO_TARGETS.map(t => (
+                      <button
+                        key={`l2-${t}`}
+                        onClick={() => updateParam('lfo2', 'target', t)}
+                        className={`text-[8px] uppercase px-1 py-0.5 rounded ${
+                          params.lfo2.target === t
+                            ? 'text-nexus-pink bg-nexus-pink/10 border border-nexus-pink/30'
+                            : 'text-nexus-text-muted'
+                        }`}
+                      >
+                        {t === 'filter2' ? 'F2' : t.slice(0, 3)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="p-3 flex gap-2 items-start">
+                  <Knob label="RATE" value={params.lfo2.rate} min={0.01} max={20} unit="Hz" color="#ff2d7b" onChange={v => updateParam('lfo2', 'rate', v)} />
+                  <Knob label="DEPTH" value={params.lfo2.depth} min={0} max={2000} color="#ff2d7b" onChange={v => updateParam('lfo2', 'depth', v)} />
+                </div>
+              </div>
+
+              <div className="panel w-[210px] flex-shrink-0 overflow-y-auto">
+                <div className="panel-header"><span>MOD MATRIX</span></div>
+                <div className="p-2 flex flex-col gap-1">
+                  {params.modMatrix.slice(0, 4).map((route, i) => (
+                    <div key={i} className="flex items-center gap-1 text-[8px]">
+                      <input
+                        type="checkbox"
+                        checked={route.enabled}
+                        onChange={(e) => {
+                          setParams((prev) => {
+                            const next = hydrateParams(deepClone(prev));
+                            next.modMatrix[i] = { ...next.modMatrix[i], enabled: e.target.checked };
+                            return next;
+                          });
+                        }}
+                      />
+                      <select
+                        value={route.source}
+                        onChange={(e) => {
+                          setParams((prev) => {
+                            const next = hydrateParams(deepClone(prev));
+                            next.modMatrix[i] = { ...next.modMatrix[i], source: e.target.value as ModSource };
+                            return next;
+                          });
+                        }}
+                        className="bg-nexus-surface border border-nexus-border rounded px-0.5 w-[70px] text-nexus-text"
+                      >
+                        {(['lfo1', 'lfo2', 'modWheel', 'follower'] as ModSource[]).map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={route.dest}
+                        onChange={(e) => {
+                          setParams((prev) => {
+                            const next = hydrateParams(deepClone(prev));
+                            next.modMatrix[i] = { ...next.modMatrix[i], dest: e.target.value as ModDest };
+                            return next;
+                          });
+                        }}
+                        className="bg-nexus-surface border border-nexus-border rounded px-0.5 w-[68px] text-nexus-text"
+                      >
+                        {(['cutoff1', 'cutoff2', 'res1', 'pitch', 'amp', 'drive'] as ModDest[]).map((d) => (
+                          <option key={d} value={d}>{d}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="range"
+                        min={-1}
+                        max={1}
+                        step={0.05}
+                        value={route.depth}
+                        onChange={(e) => {
+                          const depth = Number(e.target.value);
+                          setParams((prev) => {
+                            const next = hydrateParams(deepClone(prev));
+                            next.modMatrix[i] = { ...next.modMatrix[i], depth };
+                            return next;
+                          });
+                        }}
+                        className="w-10 h-1"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               <div className="panel flex-1">
                 <div className="panel-header"><span>EFFECTS</span></div>
                 <div className="p-3 flex flex-wrap gap-2 items-start">
@@ -470,6 +637,7 @@ const App: React.FC = () => {
                   <Knob label="DLY FB" value={params.effects.delayFeedback} min={0} max={0.9} onChange={v => updateParam('effects', 'delayFeedback', v)} />
                   <Knob label="CHR MIX" value={params.effects.chorusMix} min={0} max={1} color="#a855f7" onChange={v => updateParam('effects', 'chorusMix', v)} />
                   <Knob label="CHR RATE" value={params.effects.chorusRate} min={0.1} max={6} unit="Hz" color="#a855f7" onChange={v => updateParam('effects', 'chorusRate', v)} />
+                  <Knob label="CHR DEPTH" value={params.effects.chorusDepth} min={0} max={1} color="#a855f7" onChange={v => updateParam('effects', 'chorusDepth', v)} />
                   <Knob label="DIST" value={params.effects.distortionDrive} min={0} max={1} onChange={v => updateParam('effects', 'distortionDrive', v)} />
                   <Knob label="DIST MX" value={params.effects.distortionMix} min={0} max={1} onChange={v => updateParam('effects', 'distortionMix', v)} />
                 </div>
@@ -483,11 +651,40 @@ const App: React.FC = () => {
               </div>
             </div>
           </>
+        ) : viewMode === 'voice' ? (
+          <div className="panel flex-1 overflow-auto">
+            <div className="panel-header"><span>VOICE → PATTERN</span></div>
+            <CaptureStudio
+              engine={engine}
+              initAudio={initAudio}
+              sampleMix={params.sampleMix}
+              onSampleMix={(v) => updateParam('sampleMix', '', v)}
+              followFilter={followFilter}
+              onFollowFilter={setFollowFilter}
+              onPattern={(grid, bpm, rootMidi) => {
+                setSeqPattern(grid);
+                setSeqPatternId((n) => n + 1);
+                setViewMode('sequencer');
+                const eng = engineRef.current;
+                if (eng) {
+                  eng.sampleRootMidi = rootMidi;
+                }
+                void bpm;
+              }}
+            />
+          </div>
         ) : (
           <div className="panel flex-1">
             <div className="panel-header"><span>STEP SEQUENCER</span></div>
             <div className="p-3 flex-1">
-              <Sequencer onNoteOn={handleNoteOn} onNoteOff={handleNoteOff} baseOctave={octave} />
+              <Sequencer
+                onNoteOn={handleNoteOn}
+                onNoteOff={handleNoteOff}
+                baseOctave={octave}
+                audioTime={() => engineRef.current?.ctx.currentTime ?? performance.now() / 1000}
+                pattern={seqPattern}
+                patternId={seqPatternId}
+              />
             </div>
           </div>
         )}
@@ -515,7 +712,7 @@ const App: React.FC = () => {
             <span className="ml-3 text-nexus-text-dim">● {getActiveProviders().join(' · ')}</span>
           )}
         </span>
-        <span>{engine ? `${engine.ctx.sampleRate}Hz · ${engine.ctx.state}` : 'Audio not initialized'}</span>
+        <span>{engine ? `${engine.ctx.sampleRate}Hz · ${engine.ctx.state}${engine.workletActive ? ' · ZDF' : ''}` : 'Audio not initialized'}</span>
       </footer>
     </div>
   );
